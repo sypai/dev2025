@@ -34,8 +34,8 @@ print("Slice [::2]:", slice_array[::2])         # [5, 15, 25]
 print("Reversed [::-1]:", slice_array[::-1])    # [30, 25, 20, 15, 10, 5]
 
 # TODO: Slice to get middle 4 elements of a 10-element array ✔️
-print("middle 4 elements by slicing the array")
-print(slice_array[1:5])
+big_arr = list(range(1, 11))
+print("Middle 4 of 10-element array:", big_arr[3:7])  # 4th to 7th items
 
 print("\n========== 4. Looping ==========\n")
 

@@ -72,11 +72,52 @@ def two_sum_naive_2(array, target):
 
 # A better solution 
 # Since, we can sort the array and look from both sides, we should consider 2-pointer method
-# TODO
+"""
+- we sort the array, let's say in increasing order
+  [-4, -1, 1, 3, 5, 6, 8, 11]
+- we have a pointer i, starting from left side of the array, idx = 0
+- we have another pointer j, starting from right side
 
+- we check sum of arr[i] + arr[j] and compare it to target
+    if sum = target: we have our answer
+    if sum < target: 
+        like -4 (i=0) and 11 (j=7), sum=7 < 10, 
+        we know we need to increase the sum
+        which can be done increasing i by 1, and checking again
+        i=i+1, i=1
+        now, -1 (i=1) and 11 (j=7), sum=10 = 10 
+        we have our answer
+    if sum > target:
+        we decrease j by 1
+    what if we don't get sum==targetSum, where do we stop?
+    when i==j
+"""
+# Time Complexity : O (n log n) | Space Complexity : O (1)
+def two_sum_two_pointer(array, target):
+    answer = []
+    i = 0
+    j = len(array) - 1
+    array = sorted(array) # O (n log n)
+    while i < j: # O (n)
+        currentSum = array[i] + array[j]
+        
+        if currentSum < target:
+            i += 1
+        elif currentSum > target:
+            j -= 1
+        else:
+            answer.append(array[i])
+            answer.append(array[j])
+            break
+    return answer
+
+"""
+
+"""
 
 if __name__ == "__main__":
     arr = [3, 5, -4, 8, 11, 1, -1, 6]
     target = 10
-    print(two_sum_naive(arr, target))
-    print(two_sum_naive_2(arr, target))
+    # print(two_sum_naive(arr, target))
+    # print(two_sum_naive_2(arr, target))
+    print(two_sum_two_pointer(arr, target))

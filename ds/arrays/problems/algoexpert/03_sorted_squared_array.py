@@ -119,6 +119,8 @@ def sorted_squared(arr):
 # Time: O(n) | Space: O(n)
 def sorted_squared_array(arr):
     result = [0] * len(arr)
+    # another way to create an array for another array's length is
+    # result = [0 for _ in array]
     left = 0
     right = len(arr) - 1
     i = len(arr) - 1  # We fill from the end

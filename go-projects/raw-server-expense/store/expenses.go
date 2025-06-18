@@ -1,32 +1,46 @@
 package store
 
 import (
-	"basic-expense-tracker/models"
+	"database/sql"
+	"log"
 	"sync"
+
+	_ "modernc.org/sqlite" // registers driver
 )
 
-type ExpenseDB struct {
-	Expenses []models.Expense
-	NextID   int
-}
-
 var (
-	db   *ExpenseDB
+	db   *sql.DB
 	once sync.Once
 )
 
 // initDB initializes and returns a singleton instance of ExpenseDB
-func initDB() *ExpenseDB {
+
+func initDB() *sql.DB {
 	once.Do(func() {
-		db = &ExpenseDB{
-			Expenses: []models.Expense{},
-			NextID:   1,
+		var err error
+		db, err = sql.Open("sqlite", "/Users/sypai/Desktop/code/dev2025/go-projects/raw-server-expense/store/expenses.db")
+		if err != nil {
+			log.Fatalf("failed to open DB: %v", err)
+		}
+
+		createTable := `
+		CREATE TABLE IF NOT EXISTS expenses (
+			id INTEGER PRIMARY KEY AUTOINCREMENT,
+			amount REAL,
+			category TEXT,
+			note TEXT,
+			date TEXT
+		);`
+
+		if _, err := db.Exec(createTable); err != nil {
+			log.Fatalf("failed to create table: %v", err)
 		}
 	})
-	return db // return the memory address of the struct, aka a pointer to type ExpenseDB
+
+	return db
 }
 
 // GetDB returns the singleton instance
-func GetDB() *ExpenseDB {
+func GetDB() *sql.DB {
 	return initDB()
 }

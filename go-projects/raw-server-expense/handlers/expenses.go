@@ -1,13 +1,13 @@
 package handlers
 
 import (
+	"basic-expense-tracker/models"
 	"database/sql"
 	"encoding/json"
-	"fmt"
+	"errors"
 	"net/http"
 	"strconv"
-
-	"basic-expense-tracker/models"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -15,20 +15,25 @@ import (
 
 type ExpenseHandler struct {
 	DB     *sql.DB
-	router http.Handler // internal router
+	router http.Handler
 }
 
 func NewExpenseHandler(db *sql.DB) *ExpenseHandler {
 	h := &ExpenseHandler{DB: db}
 
 	r := chi.NewRouter()
+	r.Use(middleware.RequestID)
 	r.Use(middleware.Logger)
+	r.Use(middleware.Recoverer)
+	r.Use(jsonContentType)
+
 	r.Get("/", h.HandleRoot)
 
 	r.Route("/expenses", func(r chi.Router) {
 		r.Get("/", h.HandleGETExpenses)
 		r.Post("/", h.HandlePOSTExpense)
 		r.Get("/{id}", h.HandleGETExpenseByID)
+		r.Put("/{id}", h.HandlePUTExpenseByID)
 		r.Delete("/{id}", h.HandleDELETEExpenseByID)
 	})
 
@@ -37,30 +42,39 @@ func NewExpenseHandler(db *sql.DB) *ExpenseHandler {
 }
 
 func (h *ExpenseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
-	h.router.ServeHTTP(w, r) // delegate to chi
+	h.router.ServeHTTP(w, r)
 }
 
-// root handler
+// --- Middleware to enforce JSON content type
+func jsonContentType(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		next.ServeHTTP(w, r)
+	})
+}
+
+// --- Root handler
 func (h *ExpenseHandler) HandleRoot(w http.ResponseWriter, r *http.Request) {
-	fmt.Fprintln(w, "welcome! track you expenses!")
+	json.NewEncoder(w).Encode(map[string]string{"message": "📘 Welcome to the Expense Tracker API!"})
 }
 
-func (h *ExpenseHandler) HandleExpenses(w http.ResponseWriter, r *http.Request) {
-	switch r.Method {
-	case http.MethodGet:
-		h.HandleGETExpenses(w, r)
-	case http.MethodPost:
-		h.HandlePOSTExpense(w, r)
-	default:
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-	}
-}
-
-// /GET expenses
+// --- GET /expenses with optional query filtering
 func (h *ExpenseHandler) HandleGETExpenses(w http.ResponseWriter, r *http.Request) {
-	rows, err := h.DB.Query(`SELECT id, amount, category, note, date FROM expenses`)
+	category := strings.TrimSpace(r.URL.Query().Get("category"))
+
+	var (
+		rows *sql.Rows
+		err  error
+	)
+
+	if category != "" {
+		rows, err = h.DB.Query(`SELECT id, amount, category, note, date FROM expenses WHERE category = ?`, category)
+	} else {
+		rows, err = h.DB.Query(`SELECT id, amount, category, note, date FROM expenses`)
+	}
+
 	if err != nil {
-		http.Error(w, "query failed", http.StatusInternalServerError)
+		http.Error(w, "Query failed", http.StatusInternalServerError)
 		return
 	}
 	defer rows.Close()
@@ -74,47 +88,44 @@ func (h *ExpenseHandler) HandleGETExpenses(w http.ResponseWriter, r *http.Reques
 		expenses = append(expenses, exp)
 	}
 
-	w.Header().Set("Content-Type", "application/json")
 	json.NewEncoder(w).Encode(expenses)
 }
 
-// /POST expenses
+// --- POST /expenses
 func (h *ExpenseHandler) HandlePOSTExpense(w http.ResponseWriter, r *http.Request) {
 	var exp models.Expense
 	if err := json.NewDecoder(r.Body).Decode(&exp); err != nil {
-		http.Error(w, "invalid request", http.StatusBadRequest)
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
 		return
 	}
 
-	res, err := h.DB.Exec(`INSERT INTO expenses (amount, category, note, date)
-		VALUES (?, ?, ?, ?)`, exp.Amount, exp.Category, exp.Note, exp.Date)
+	res, err := h.DB.Exec(`INSERT INTO expenses (amount, category, note, date) VALUES (?, ?, ?, ?)`,
+		exp.Amount, exp.Category, exp.Note, exp.Date)
 	if err != nil {
-		http.Error(w, "insert failed", http.StatusInternalServerError)
+		http.Error(w, "Insert failed", http.StatusInternalServerError)
 		return
 	}
 
 	id, _ := res.LastInsertId()
 	exp.ID = int(id)
 
-	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(exp)
 }
 
+// --- GET /expenses/{id}
 func (h *ExpenseHandler) HandleGETExpenseByID(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-
-	id, err := strconv.Atoi(idStr)
+	id, err := parseID(chi.URLParam(r, "id"))
 	if err != nil {
 		http.Error(w, "Invalid ID", http.StatusBadRequest)
 		return
 	}
 
-	var expense models.Expense
+	var exp models.Expense
 	err = h.DB.QueryRow(`SELECT id, amount, category, note, date FROM expenses WHERE id = ?`, id).
-		Scan(&expense.ID, &expense.Amount, &expense.Category, &expense.Note, &expense.Date)
+		Scan(&exp.ID, &exp.Amount, &exp.Category, &exp.Note, &exp.Date)
 
-	if err == sql.ErrNoRows {
+	if errors.Is(err, sql.ErrNoRows) {
 		http.Error(w, "Expense not found", http.StatusNotFound)
 		return
 	} else if err != nil {
@@ -122,30 +133,58 @@ func (h *ExpenseHandler) HandleGETExpenseByID(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(expense)
+	json.NewEncoder(w).Encode(exp)
 }
 
+// --- PUT /expenses/{id}
+func (h *ExpenseHandler) HandlePUTExpenseByID(w http.ResponseWriter, r *http.Request) {
+	id, err := parseID(chi.URLParam(r, "id"))
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	var exp models.Expense
+	if err := json.NewDecoder(r.Body).Decode(&exp); err != nil {
+		http.Error(w, "Invalid JSON body", http.StatusBadRequest)
+		return
+	}
+
+	_, err = h.DB.Exec(`UPDATE expenses SET amount = ?, category = ?, note = ?, date = ? WHERE id = ?`,
+		exp.Amount, exp.Category, exp.Note, exp.Date, id)
+	if err != nil {
+		http.Error(w, "Update failed", http.StatusInternalServerError)
+		return
+	}
+
+	exp.ID = id
+	json.NewEncoder(w).Encode(exp)
+}
+
+// --- DELETE /expenses/{id}
 func (h *ExpenseHandler) HandleDELETEExpenseByID(w http.ResponseWriter, r *http.Request) {
-	idStr := chi.URLParam(r, "id")
-
-	id, err := strconv.Atoi(idStr)
+	id, err := parseID(chi.URLParam(r, "id"))
 	if err != nil {
-		http.Error(w, "Invalid expense ID", http.StatusBadRequest)
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
 		return
 	}
 
-	result, err := h.DB.Exec(`DELETE FROM expenses WHERE id = ?`, id)
+	res, err := h.DB.Exec(`DELETE FROM expenses WHERE id = ?`, id)
 	if err != nil {
-		http.Error(w, "Failed to delete expense", http.StatusInternalServerError)
+		http.Error(w, "Delete failed", http.StatusInternalServerError)
 		return
 	}
 
-	rowsAffected, _ := result.RowsAffected()
-	if rowsAffected == 0 {
+	n, _ := res.RowsAffected()
+	if n == 0 {
 		http.Error(w, "Expense not found", http.StatusNotFound)
 		return
 	}
 
-	w.WriteHeader(http.StatusNoContent) // 204 No Content
+	w.WriteHeader(http.StatusNoContent)
+}
+
+// --- Utility: Parse string ID to int
+func parseID(s string) (int, error) {
+	return strconv.Atoi(s)
 }

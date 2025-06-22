@@ -58,21 +58,56 @@ func (h *ExpenseHandler) HandleRoot(w http.ResponseWriter, r *http.Request) {
 	json.NewEncoder(w).Encode(map[string]string{"message": "📘 Welcome to the Expense Tracker API!"})
 }
 
-// --- GET /expenses with optional query filtering
+// --- GET /expenses with optional query filtering and pagination
 func (h *ExpenseHandler) HandleGETExpenses(w http.ResponseWriter, r *http.Request) {
-	category := strings.TrimSpace(r.URL.Query().Get("category"))
+	query := r.URL.Query()
+	category := strings.TrimSpace(query.Get("category"))
+	limitStr := query.Get("limit")
+	offsetStr := query.Get("offset")
 
-	var (
-		rows *sql.Rows
-		err  error
-	)
+	limit := 20
+	offset := 0
 
-	if category != "" {
-		rows, err = h.DB.Query(`SELECT id, amount, category, note, date FROM expenses WHERE category = ?`, category)
-	} else {
-		rows, err = h.DB.Query(`SELECT id, amount, category, note, date FROM expenses`)
+	if l, err := strconv.Atoi(limitStr); err == nil && l > 0 {
+		limit = l
+	}
+	if o, err := strconv.Atoi(offsetStr); err == nil && o >= 0 {
+		offset = o
 	}
 
+	// -- COUNT TOTAL MATCHING ROWS
+	countQuery := "SELECT COUNT(*) FROM expenses"
+	var countArgs []interface{}
+	var filters []string
+
+	if category != "" {
+		filters = append(filters, "category = ?")
+		countArgs = append(countArgs, category)
+	}
+
+	if len(filters) > 0 {
+		countQuery += " WHERE " + strings.Join(filters, " AND ")
+	}
+
+	var total int
+	if err := h.DB.QueryRow(countQuery, countArgs...).Scan(&total); err != nil {
+		http.Error(w, "Failed to count records", http.StatusInternalServerError)
+		return
+	}
+
+	// -- FETCH ACTUAL EXPENSES
+	selectQuery := `SELECT id, amount, category, note, date FROM expenses`
+	var selectArgs []interface{}
+
+	if len(filters) > 0 {
+		selectQuery += " WHERE " + strings.Join(filters, " AND ")
+		selectArgs = append(selectArgs, countArgs...)
+	}
+
+	selectQuery += " ORDER BY id DESC LIMIT ? OFFSET ?"
+	selectArgs = append(selectArgs, limit, offset)
+
+	rows, err := h.DB.Query(selectQuery, selectArgs...)
 	if err != nil {
 		http.Error(w, "Query failed", http.StatusInternalServerError)
 		return
@@ -88,7 +123,17 @@ func (h *ExpenseHandler) HandleGETExpenses(w http.ResponseWriter, r *http.Reques
 		expenses = append(expenses, exp)
 	}
 
-	json.NewEncoder(w).Encode(expenses)
+	// -- Compose final response with metadata
+	resp := map[string]interface{}{
+		"data": expenses,
+		"meta": map[string]int{
+			"limit":  limit,
+			"offset": offset,
+			"total":  total,
+		},
+	}
+
+	json.NewEncoder(w).Encode(resp)
 }
 
 // --- POST /expenses

@@ -1,15 +1,41 @@
 package handlers
 
 import (
-	"basic-expense-tracker/models"
 	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"strconv"
+
+	"basic-expense-tracker/models"
+
+	"github.com/go-chi/chi"
 )
 
 type ExpenseHandler struct {
-	DB *sql.DB
+	DB     *sql.DB
+	router http.Handler // internal router
+}
+
+func NewExpenseHandler(db *sql.DB) *ExpenseHandler {
+	h := &ExpenseHandler{DB: db}
+
+	r := chi.NewRouter()
+	r.Get("/", h.HandleRoot)
+
+	r.Route("/expenses", func(r chi.Router) {
+		r.Get("/", h.HandleGETExpenses)
+		r.Post("/", h.HandlePOSTExpense)
+		r.Get("/{id}", h.HandleGETExpenseByID)
+		r.Delete("/{id}", h.HandleDELETEExpenseByID)
+	})
+
+	h.router = r
+	return h
+}
+
+func (h *ExpenseHandler) ServeHTTP(w http.ResponseWriter, r *http.Request) {
+	h.router.ServeHTTP(w, r) // delegate to chi
 }
 
 // root handler
@@ -71,4 +97,53 @@ func (h *ExpenseHandler) HandlePOSTExpense(w http.ResponseWriter, r *http.Reques
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	json.NewEncoder(w).Encode(exp)
+}
+
+func (h *ExpenseHandler) HandleGETExpenseByID(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid ID", http.StatusBadRequest)
+		return
+	}
+
+	var expense models.Expense
+	err = h.DB.QueryRow(`SELECT id, amount, category, note, date FROM expenses WHERE id = ?`, id).
+		Scan(&expense.ID, &expense.Amount, &expense.Category, &expense.Note, &expense.Date)
+
+	if err == sql.ErrNoRows {
+		http.Error(w, "Expense not found", http.StatusNotFound)
+		return
+	} else if err != nil {
+		http.Error(w, "Query error", http.StatusInternalServerError)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	json.NewEncoder(w).Encode(expense)
+}
+
+func (h *ExpenseHandler) HandleDELETEExpenseByID(w http.ResponseWriter, r *http.Request) {
+	idStr := chi.URLParam(r, "id")
+
+	id, err := strconv.Atoi(idStr)
+	if err != nil {
+		http.Error(w, "Invalid expense ID", http.StatusBadRequest)
+		return
+	}
+
+	result, err := h.DB.Exec(`DELETE FROM expenses WHERE id = ?`, id)
+	if err != nil {
+		http.Error(w, "Failed to delete expense", http.StatusInternalServerError)
+		return
+	}
+
+	rowsAffected, _ := result.RowsAffected()
+	if rowsAffected == 0 {
+		http.Error(w, "Expense not found", http.StatusNotFound)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent) // 204 No Content
 }

@@ -9,7 +9,8 @@ import (
 
 	"basic-expense-tracker/models"
 
-	"github.com/go-chi/chi"
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 )
 
 type ExpenseHandler struct {
@@ -21,6 +22,7 @@ func NewExpenseHandler(db *sql.DB) *ExpenseHandler {
 	h := &ExpenseHandler{DB: db}
 
 	r := chi.NewRouter()
+	r.Use(middleware.Logger)
 	r.Get("/", h.HandleRoot)
 
 	r.Route("/expenses", func(r chi.Router) {
